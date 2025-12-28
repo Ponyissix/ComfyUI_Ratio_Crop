@@ -24,6 +24,7 @@ app.registerExtension({
             this.w_w = this.widgets.find(w => w.name === "crop_w");
             this.w_h = this.widgets.find(w => w.name === "crop_h");
             this.w_mask_path = this.widgets.find(w => w.name === "brush_mask_path");
+            this.w_padding = this.widgets.find(w => w.name === "padding");
             
             // 关键：在前端隐藏 brush_mask_path，使其不可见但功能正常
             if (this.w_mask_path) {
@@ -32,7 +33,17 @@ app.registerExtension({
             }
 
             // 添加按钮
-            this.addWidget("button", "选定裁切范围", null, () => {
+            this.cropBtn = this.addWidget("button", "选定裁切范围", null, () => {
+                // 如果按钮被禁用（通过修改 label 或 style），则不执行
+                // 检查 image_input 是否连接
+                if (this.inputs) {
+                    const imageInput = this.inputs.find(i => i.name === "image_input");
+                    if (imageInput && imageInput.link !== null) {
+                        alert("已连接外部图片输入，请直接运行节点，无需手动裁切。");
+                        return;
+                    }
+                }
+
                 // 在点击按钮时，再次尝试获取最新的 image widget 值并加载
                 // 这是一个双重保险，防止 callback 没触发或者加载失败
                 const currentImageName = this.w_image.value;
@@ -66,6 +77,39 @@ app.registerExtension({
                 this.loadImage(value);
             };
 
+            // 监听连接变化，更新按钮状态
+            const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+            this.onConnectionsChange = function(type, index, connected, link_info, slot_info) {
+                if (onConnectionsChange) onConnectionsChange.apply(this, arguments);
+                
+                // 检查 image_input 连接状态
+                // slot_info 包含 name, type 等
+                // 如果没有 slot_info (有时发生)，我们需要遍历 inputs
+                
+                let isImageInputConnected = false;
+                if (this.inputs) {
+                    const imageInput = this.inputs.find(i => i.name === "image_input");
+                    if (imageInput && imageInput.link !== null) {
+                        isImageInputConnected = true;
+                    }
+                }
+                
+                if (this.cropBtn) {
+                    if (isImageInputConnected) {
+                        this.cropBtn.name = "🚫 使用外部输入中";
+                        // ComfyUI 的 button widget 没有直接的 disabled 属性，我们通过回调拦截和改名来实现
+                    } else {
+                        this.cropBtn.name = "选定裁切范围";
+                    }
+                    this.setDirtyCanvas(true); // 刷新 UI 显示
+                }
+            };
+            
+            // 初始化时检查一次
+            setTimeout(() => {
+                 if (this.onConnectionsChange) this.onConnectionsChange();
+            }, 100);
+
             // 修正：对于粘贴图片，ComfyUI 可能不会触发 callback，或者值传递不完整
             // 我们需要 hook 节点的 onInputAdded 或者 check 变化
             // 但最直接的是重写 onNodeCreated 里的逻辑，确保加载
@@ -84,6 +128,38 @@ app.registerExtension({
             // 问题可能在于：点击“选定裁切范围”时，this.img 还没更新？
             
             return r;
+        };
+
+        // 新增：监听执行完成事件，用于更新预览图 (特别是当使用 image_input 时)
+        const onExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function(message) {
+            onExecuted?.apply(this, arguments);
+
+            // 检查是否有 UI 图像返回 (我们在 Python 端返回了预览图)
+            if (message && message.ui && message.ui.images) {
+                const imgs = message.ui.images;
+                if (imgs.length > 0) {
+                    const imgData = imgs[0];
+                    // 构建预览图 URL
+                    const url = api.apiURL(`/view?filename=${encodeURIComponent(imgData.filename)}&type=${imgData.type}&subfolder=${encodeURIComponent(imgData.subfolder)}`);
+                    
+                    // 加载并显示
+                    const newPreview = new Image();
+                    newPreview.onload = () => {
+                        this.previewImg = newPreview;
+                        // 更新 ComfyUI 的默认缩略图
+                        if (this.imgs) {
+                            this.imgs[0] = newPreview;
+                        } else {
+                            this.imgs = [newPreview];
+                        }
+                        
+                        // 强制刷新节点显示
+                        this.setDirtyCanvas(true, true);
+                    };
+                    newPreview.src = url;
+                }
+            }
         };
 
         nodeType.prototype.loadImage = function(imageName) {
@@ -174,6 +250,11 @@ app.registerExtension({
 
         // 核心：生成带框的静态预览图
         nodeType.prototype.updatePreview = function() {
+            // 如果已经有了来自后端的预览图 (onExecuted 设置的)，优先显示它？
+            // 不，通常 updatePreview 是在 UI 交互时调用的。如果用户调整了 widget，应该显示前端合成的预览。
+            // 但是，如果用户使用的是 image_input，前端没有 this.img，所以下面的逻辑会直接 return。
+            // 因此，onExecuted 设置的 this.imgs[0] 依然有效，不会被这里覆盖。
+            
             if (!this.img) return;
 
             const canvas = document.createElement("canvas");
@@ -350,12 +431,12 @@ app.registerExtension({
             brushSizeInput.title = "画笔大小";
             
             const paddingLabel = document.createElement("span");
-            paddingLabel.innerText = "冗余(%): 40";
+            paddingLabel.innerText = "冗余(%): 20";
             const paddingInput = document.createElement("input");
             paddingInput.type = "range";
             paddingInput.min = "0";
             paddingInput.max = "100";
-            paddingInput.value = "40"; 
+            paddingInput.value = this.w_padding ? this.w_padding.value : "20"; 
             paddingInput.title = "冗余比例";
             
             // 实时更新数值显示
@@ -774,8 +855,21 @@ app.registerExtension({
                         const formData = new FormData();
                         // 生成唯一文件名
                         const filename = `brush_mask_${Date.now()}.png`;
-                   只有涂抹a.a直接pend('image', blob, filename);
-                    formData.append       // 关键修正：使用服务器返回的真实文件名
+                        formData.append('image', blob, filename);
+                        formData.append('overwrite', 'true');
+                        formData.append('type', 'input'); // 确保类型为 input
+
+                        const resp = await api.fetchApi("/upload/image", {
+                            method: "POST",
+                            body: formData
+                        });
+
+                        if (resp.status !== 200) {
+                            throw new Error(`Upload failed with status ${resp.status}: ${resp.statusText}`);
+                        }
+
+                        const result = await resp.json();
+                        // 关键修正：使用服务器返回的真实文件名
                         const serverFilename = result.name;
 
                         // 回填文件名到隐藏 Widget
@@ -788,7 +882,7 @@ app.registerExtension({
                     }
                 } catch (e) {
                     console.error("[RatioCropNode] Mask upload failed:", e);
-                    alert("蒙版上传失败，可能会导致 brush_mask 输出为空。");
+                    alert(`蒙版上传失败: ${e.message}\n请检查控制台日志。`);
                 }
 
                 this.w_x.value = Math.round(crop.x);
@@ -796,6 +890,7 @@ app.registerExtension({
                 this.w_w.value = Math.round(crop.w);
                 this.w_h.value = Math.round(crop.h);
                 this.w_ratio.value = ratioSelect.value; 
+                if (this.w_padding) this.w_padding.value = parseInt(paddingInput.value);
                 
                 // 保存当前的 maskCanvas 内容到 this.maskImg 以便 updatePreview 使用
                 const maskImg = new Image();
