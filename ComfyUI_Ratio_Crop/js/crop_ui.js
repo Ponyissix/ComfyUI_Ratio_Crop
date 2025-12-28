@@ -1113,11 +1113,6 @@ app.registerExtension({
 
                 ctx.save();
                 
-                // Clip to node bounds to prevent overflow
-                ctx.beginPath();
-                ctx.roundRect(0, 0, this.size[0], this.size[1], [10]); // Use roundRect to match node shape roughly
-                ctx.clip();
-                
                 // Draw Thumbnails
                 for (const rect of this.gridRects) {
                     const img = rect.item.imgObj;
