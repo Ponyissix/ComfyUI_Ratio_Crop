@@ -1080,6 +1080,25 @@ app.registerExtension({
             this.onDrawBackground = function(ctx) {
                 if (onDrawBackground) onDrawBackground.apply(this, arguments);
                 
+                // Auto-layout: Check if we need to recompute grid to fit widgets tightly
+                // This removes the gap caused by the default safe padding
+                if (this.widgets && this.widgets.length > 0 && this.uploadedImages && this.uploadedImages.length > 0) {
+                    const lastW = this.widgets[this.widgets.length - 1];
+                    if (lastW && lastW.last_y) {
+                        const h = lastW.computeSize ? lastW.computeSize()[1] : 20;
+                        const actualStartY = lastW.last_y + h + 20; // Target start Y
+                        
+                        // Check against current grid position
+                        if (this.gridRects && this.gridRects.length > 0) {
+                            const currentGridY = this.gridRects[0].y;
+                            if (Math.abs(currentGridY - actualStartY) > 5) {
+                                // Position mismatch > 5px, recompute layout
+                                this.computeGrid();
+                            }
+                        }
+                    }
+                }
+
                 if (!this.gridRects || this.gridRects.length === 0) return;
 
                 ctx.save();
