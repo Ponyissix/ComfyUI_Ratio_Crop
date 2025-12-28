@@ -1025,16 +1025,17 @@ app.registerExtension({
                 const margin = 10;
                 
                 // 计算 Widgets 高度 (简单的估算，从最后一个 Widget 的 y+h 开始)
-                let startY = 60; 
+                let startY = 180; // 增加默认高度，防止遮挡 (Title + 4 widgets)
+                
                 if (this.widgets && this.widgets.length > 0) {
                     const lastW = this.widgets[this.widgets.length - 1];
-                    // LiteGraph widgets usually have .last_y (computed position)
-                    // If not available, we estimate.
-                    // But simpler: just reserve top 100px.
-                    // Or iterate.
+                    if (lastW && lastW.last_y) {
+                        // 如果已经渲染过，使用实际位置
+                        // computeSize 返回 [w, h]
+                        const h = lastW.computeSize ? lastW.computeSize()[1] : 20;
+                        startY = lastW.last_y + h + 20;
+                    }
                 }
-                // 固定偏移，避免遮挡按钮
-                startY = 100;
 
                 const availWidth = width - margin * 2;
                 const cols = Math.max(1, Math.floor((availWidth + gap) / (thumbSize + gap)));
