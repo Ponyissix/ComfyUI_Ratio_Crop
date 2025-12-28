@@ -1072,6 +1072,16 @@ app.registerExtension({
                 if (Math.abs(size[0] - this.cachedWidth) > 5) {
                     this.cachedWidth = size[0];
                     this.computeGrid();
+                } else {
+                    // Width didn't change (vertical resize only), enforce minimum height
+                    if (this.gridRects && this.gridRects.length > 0) {
+                        const lastRect = this.gridRects[this.gridRects.length - 1];
+                        const requiredH = lastRect.y + lastRect.h + 20;
+                        if (size[1] < requiredH) {
+                            // Force height back to minimum required
+                            this.setSize([size[0], requiredH]);
+                        }
+                    }
                 }
             };
 
@@ -1102,6 +1112,11 @@ app.registerExtension({
                 if (!this.gridRects || this.gridRects.length === 0) return;
 
                 ctx.save();
+                
+                // Clip to node bounds to prevent overflow
+                ctx.beginPath();
+                ctx.roundRect(0, 0, this.size[0], this.size[1], [10]); // Use roundRect to match node shape roughly
+                ctx.clip();
                 
                 // Draw Thumbnails
                 for (const rect of this.gridRects) {
