@@ -1038,12 +1038,11 @@ app.registerExtension({
                 }
 
                 const availWidth = width - margin * 2;
-                
-                // 1. 计算一行能放下多少列 (基于最小尺寸)
+                // 计算每行可以放多少列
                 let cols = Math.floor((availWidth + gap) / (minThumbSize + gap));
                 cols = Math.max(1, cols);
                 
-                // 2. 动态计算实际缩略图大小，使其填满宽度
+                // 动态计算实际缩略图大小，使其填满宽度
                 // availWidth = cols * thumbSize + (cols - 1) * gap
                 // thumbSize = (availWidth - (cols - 1) * gap) / cols
                 const thumbSize = (availWidth - (cols - 1) * gap) / cols;
