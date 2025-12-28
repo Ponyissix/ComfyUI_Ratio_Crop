@@ -1020,7 +1020,7 @@ app.registerExtension({
                 }
 
                 const width = this.size[0];
-                const thumbSize = 160; // 更大的缩略图
+                const minThumbSize = 160; // 最小缩略图尺寸
                 const gap = 10;
                 const margin = 10;
                 
@@ -1038,7 +1038,15 @@ app.registerExtension({
                 }
 
                 const availWidth = width - margin * 2;
-                const cols = Math.max(1, Math.floor((availWidth + gap) / (thumbSize + gap)));
+                
+                // 1. 计算一行能放下多少列 (基于最小尺寸)
+                let cols = Math.floor((availWidth + gap) / (minThumbSize + gap));
+                cols = Math.max(1, cols);
+                
+                // 2. 动态计算实际缩略图大小，使其填满宽度
+                // availWidth = cols * thumbSize + (cols - 1) * gap
+                // thumbSize = (availWidth - (cols - 1) * gap) / cols
+                const thumbSize = (availWidth - (cols - 1) * gap) / cols;
                 
                 this.gridRects = [];
                 
@@ -1112,6 +1120,11 @@ app.registerExtension({
                 if (!this.gridRects || this.gridRects.length === 0) return;
 
                 ctx.save();
+                
+                // Clip to node bounds to prevent overflow
+                ctx.beginPath();
+                ctx.roundRect(0, 0, this.size[0], this.size[1], [10]); // Use roundRect to match node shape roughly
+                ctx.clip();
                 
                 // Draw Thumbnails
                 for (const rect of this.gridRects) {
