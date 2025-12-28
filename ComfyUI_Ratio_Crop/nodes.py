@@ -512,12 +512,133 @@ class RatioMergeNode:
         
         return (merged_tensor,)
 
+# --- 新增节点：批量图片加载器 ---
+class RatioBatchLoader:
+    OUTPUT_IS_LIST = (True, True) # 允许输出列表，以支持不同尺寸的图片批量处理
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "directory_path": ("STRING", {"default": "", "multiline": False}),
+                "sort_method": (["name", "date"], {"default": "name"}),
+                "method": (["Resize to First", "Keep Original"], {"default": "Resize to First"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("images", "masks")
+    FUNCTION = "load_batch"
+    CATEGORY = "Custom/Crop"
+
+    def load_batch(self, directory_path, sort_method, method):
+        if not directory_path or not directory_path.strip():
+            # Return empty list
+            return ([], [])
+
+        # Handle path: if it's relative to input dir, make it absolute
+        if not os.path.isabs(directory_path):
+            input_dir = folder_paths.get_input_directory()
+            full_path = os.path.join(input_dir, directory_path)
+        else:
+            full_path = directory_path
+
+        if not os.path.exists(full_path):
+            print(f"[RatioBatchLoader] Directory not found: {full_path}")
+            return ([], [])
+
+        # Scan for images
+        valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'}
+        files = [f for f in os.listdir(full_path) if os.path.splitext(f)[1].lower() in valid_extensions]
+        
+        if not files:
+            print(f"[RatioBatchLoader] No images found in: {full_path}")
+            return ([], [])
+
+        # Sort files
+        if sort_method == "name":
+            files.sort()
+        elif sort_method == "date":
+            files.sort(key=lambda f: os.path.getmtime(os.path.join(full_path, f)))
+
+        image_list = []
+        mask_list = []
+        
+        # Load first image to determine target size (only for Resize mode)
+        target_w, target_h = None, None
+        
+        if method == "Resize to First":
+            first_img_path = os.path.join(full_path, files[0])
+            try:
+                i = Image.open(first_img_path)
+                i = ImageOps.exif_transpose(i)
+                if i.mode == 'I': i = i.point(lambda i: i * (1 / 255))
+                first_pil = i.convert("RGB")
+                target_w, target_h = first_pil.size
+                print(f"[RatioBatchLoader] Batch target size: {target_w}x{target_h} (from {files[0]})")
+            except Exception as e:
+                print(f"[RatioBatchLoader] Failed to load first image: {e}")
+                return ([], [])
+
+        for fname in files:
+            fpath = os.path.join(full_path, fname)
+            try:
+                img = Image.open(fpath)
+                img = ImageOps.exif_transpose(img)
+                if img.mode == 'I': img = img.point(lambda i: i * (1 / 255))
+                
+                # Resize if necessary (Only in Resize mode)
+                if method == "Resize to First" and img.size != (target_w, target_h):
+                    print(f"[RatioBatchLoader] Resizing {fname} from {img.size} to {target_w}x{target_h}")
+                    img = img.resize((target_w, target_h), Image.LANCZOS)
+                
+                img_rgb = img.convert("RGB")
+                img_np = np.array(img_rgb).astype(np.float32) / 255.0
+                
+                # Convert to tensor [1, H, W, C]
+                img_tensor = torch.from_numpy(img_np)[None,]
+                image_list.append(img_tensor)
+                
+                # Handle Mask (Alpha channel) if exists
+                if 'A' in img.getbands():
+                    mask = img.getchannel('A')
+                    if method == "Resize to First":
+                        mask = mask.resize((target_w, target_h), Image.LANCZOS)
+                    mask_np = np.array(mask).astype(np.float32) / 255.0
+                    mask_list.append(torch.from_numpy(mask_np)[None,])
+                else:
+                    # Default white mask (fully visible)
+                    curr_w, curr_h = img.size
+                    mask_list.append(torch.ones((1, curr_h, curr_w), dtype=torch.float32))
+                    
+            except Exception as e:
+                print(f"[RatioBatchLoader] Failed to load {fname}: {e}")
+                continue
+
+        if not image_list:
+             return ([], [])
+
+        print(f"[RatioBatchLoader] Loaded batch of {len(image_list)} images. Method: {method}")
+
+        if method == "Resize to First":
+            # Stack into single batch tensor [B, H, W, C]
+            # But since OUTPUT_IS_LIST is True, we must return a list containing this single batch tensor
+            batch_images = torch.cat(image_list, dim=0) # [B, H, W, C]
+            batch_masks = torch.cat(mask_list, dim=0)   # [B, H, W]
+            return ([batch_images], [batch_masks])
+        else:
+            # Keep Original: Return list of individual tensors
+            # Each element is [1, H, W, C]
+            return (image_list, mask_list)
+
 NODE_CLASS_MAPPINGS = {
     "RatioCropNode": RatioCropNode,
     "RatioMergeNode": RatioMergeNode,
+    "RatioBatchLoader": RatioBatchLoader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "RatioCropNode": "Ratio Crop (Manual)",
     "RatioMergeNode": "Ratio Merge Image",
+    "RatioBatchLoader": "Ratio Batch Loader",
 }

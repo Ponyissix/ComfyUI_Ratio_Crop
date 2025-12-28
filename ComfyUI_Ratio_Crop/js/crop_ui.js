@@ -912,3 +912,284 @@ app.registerExtension({
         };
     }
 });
+
+// --- 新增：批量上传节点 UI ---
+app.registerExtension({
+    name: "Comfy.RatioBatchLoader",
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name !== "RatioBatchLoader") {
+            return;
+        }
+
+        const onNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+
+            this.w_dir = this.widgets.find(w => w.name === "directory_path");
+            this.uploadedImages = []; // Stores {name, subfolder, type, imgObj}
+            this.gridRects = [];
+            this.cachedWidth = 0;
+
+            // 添加上传按钮
+            this.addWidget("button", "上传批量图片", null, () => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.multiple = true;
+                input.accept = "image/*";
+                input.style.display = "none";
+                
+                input.onchange = async (e) => {
+                    const files = e.target.files;
+                    if (!files || files.length === 0) return;
+
+                    const batchName = `batch_${Date.now()}`;
+                    console.log(`[RatioBatchLoader] Uploading ${files.length} images to ${batchName}...`);
+
+                    let successCount = 0;
+                    const newImages = [];
+                    
+                    for (let i = 0; i < files.length; i++) {
+                        const file = files[i];
+                        const formData = new FormData();
+                        formData.append('image', file);
+                        formData.append('overwrite', 'false');
+                        formData.append('subfolder', batchName);
+                        formData.append('type', 'input');
+
+                        try {
+                            const resp = await api.fetchApi("/upload/image", {
+                                method: "POST",
+                                body: formData
+                            });
+                            if (resp.status === 200) {
+                                successCount++;
+                                const res = await resp.json();
+                                newImages.push(res);
+                            }
+                        } catch (err) {
+                            console.error("Upload failed for", file.name, err);
+                        }
+                    }
+
+                    if (successCount > 0) {
+                        console.log(`[RatioBatchLoader] Successfully uploaded ${successCount} images.`);
+                        if (this.w_dir) {
+                            this.w_dir.value = batchName;
+                            app.graph.setDirtyCanvas(true, true);
+                        }
+                        
+                        // 加载图片对象
+                        await this.loadImages(newImages);
+                        
+                    } else {
+                        alert("上传失败，请检查控制台。");
+                    }
+                };
+
+                document.body.appendChild(input);
+                input.click();
+                document.body.removeChild(input);
+            });
+            
+            // 加载图片资源
+            this.loadImages = async (imagesData) => {
+                this.uploadedImages = [];
+                for (const data of imagesData) {
+                    const img = new Image();
+                    img.crossOrigin = "Anonymous";
+                    const url = api.apiURL(`/view?filename=${encodeURIComponent(data.name)}&type=${data.type}&subfolder=${encodeURIComponent(data.subfolder)}`);
+                    img.src = url;
+                    // Wait for load? No, let them load async and redraw
+                    img.onload = () => {
+                        app.graph.setDirtyCanvas(true, true);
+                    };
+                    this.uploadedImages.push({
+                        ...data,
+                        imgObj: img
+                    });
+                }
+                this.computeGrid();
+            };
+
+            // 计算网格布局
+            this.computeGrid = () => {
+                if (!this.uploadedImages || this.uploadedImages.length === 0) {
+                    this.setSize([this.size[0], 120]);
+                    this.gridRects = [];
+                    return;
+                }
+
+                const width = this.size[0];
+                const thumbSize = 160; // 更大的缩略图
+                const gap = 10;
+                const margin = 10;
+                
+                // 计算 Widgets 高度 (简单的估算，从最后一个 Widget 的 y+h 开始)
+                let startY = 60; 
+                if (this.widgets && this.widgets.length > 0) {
+                    const lastW = this.widgets[this.widgets.length - 1];
+                    // LiteGraph widgets usually have .last_y (computed position)
+                    // If not available, we estimate.
+                    // But simpler: just reserve top 100px.
+                    // Or iterate.
+                }
+                // 固定偏移，避免遮挡按钮
+                startY = 100;
+
+                const availWidth = width - margin * 2;
+                const cols = Math.max(1, Math.floor((availWidth + gap) / (thumbSize + gap)));
+                
+                this.gridRects = [];
+                
+                this.uploadedImages.forEach((item, index) => {
+                    const c = index % cols;
+                    const r = Math.floor(index / cols);
+                    
+                    const x = margin + c * (thumbSize + gap);
+                    const y = startY + r * (thumbSize + gap);
+                    
+                    this.gridRects.push({
+                        x, y, w: thumbSize, h: thumbSize,
+                        item: item,
+                        index: index
+                    });
+                });
+
+                // Update Node Height
+                if (this.gridRects.length > 0) {
+                    const lastRect = this.gridRects[this.gridRects.length - 1];
+                    const totalH = lastRect.y + lastRect.h + margin;
+                    this.setSize([width, totalH]);
+                }
+            };
+            
+            // Hook onResize to recompute grid
+            const onResize = this.onResize;
+            this.onResize = function(size) {
+                if (onResize) onResize.apply(this, arguments);
+                // Debounce or just recompute
+                if (Math.abs(size[0] - this.cachedWidth) > 5) {
+                    this.cachedWidth = size[0];
+                    this.computeGrid();
+                }
+            };
+
+            // Custom Drawing
+            const onDrawBackground = this.onDrawBackground;
+            this.onDrawBackground = function(ctx) {
+                if (onDrawBackground) onDrawBackground.apply(this, arguments);
+                
+                if (!this.gridRects || this.gridRects.length === 0) return;
+
+                ctx.save();
+                
+                // Draw Thumbnails
+                for (const rect of this.gridRects) {
+                    const img = rect.item.imgObj;
+                    
+                    // Draw Background
+                    ctx.fillStyle = "#222";
+                    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+                    
+                    if (img && img.complete && img.naturalWidth > 0) {
+                        // Object Fit: Cover
+                        const scale = Math.max(rect.w / img.width, rect.h / img.height);
+                        const drawW = img.width * scale;
+                        const drawH = img.height * scale;
+                        const drawX = rect.x + (rect.w - drawW) / 2;
+                        const drawY = rect.y + (rect.h - drawH) / 2;
+                        
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.rect(rect.x, rect.y, rect.w, rect.h);
+                        ctx.clip();
+                        ctx.drawImage(img, drawX, drawY, drawW, drawH);
+                        ctx.restore();
+                    } else {
+                        // Loading text
+                        ctx.fillStyle = "#666";
+                        ctx.font = "12px Arial";
+                        ctx.fillText("Loading...", rect.x + 5, rect.y + 20);
+                    }
+                    
+                    // Draw Delete Button (Red X at top-right)
+                    const btnSize = 24;
+                    const btnX = rect.x + rect.w - btnSize;
+                    const btnY = rect.y;
+                    
+                    ctx.fillStyle = "rgba(200, 0, 0, 0.8)";
+                    ctx.fillRect(btnX, btnY, btnSize, btnSize);
+                    
+                    ctx.fillStyle = "white";
+                    ctx.font = "bold 16px Arial";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText("×", btnX + btnSize/2, btnY + btnSize/2);
+                    
+                    // Draw Filename (truncated) at bottom
+                    ctx.fillStyle = "rgba(0,0,0,0.6)";
+                    ctx.fillRect(rect.x, rect.y + rect.h - 20, rect.w, 20);
+                    ctx.fillStyle = "white";
+                    ctx.font = "10px Arial";
+                    ctx.textAlign = "left";
+                    ctx.fillText(rect.item.name.substring(0, 20), rect.x + 2, rect.y + rect.h - 6);
+                }
+                
+                ctx.restore();
+            };
+            
+            // Handle Clicks
+            this.onMouseDown = function(e, localPos, canvas) {
+                if (!this.gridRects) return;
+                
+                const x = localPos[0];
+                const y = localPos[1];
+                
+                for (const rect of this.gridRects) {
+                    // Check if clicked inside thumbnail
+                    if (x >= rect.x && x <= rect.x + rect.w &&
+                        y >= rect.y && y <= rect.y + rect.h) {
+                        
+                        // Check if clicked Delete Button (Top Right)
+                        const btnSize = 24;
+                        const btnX = rect.x + rect.w - btnSize;
+                        const btnY = rect.y;
+                        
+                        if (x >= btnX && x <= btnX + btnSize &&
+                            y >= btnY && y <= btnY + btnSize) {
+                            
+                            // Handle Delete
+                            const item = rect.item;
+                            if (confirm(`确定要删除 ${item.name} 吗？`)) {
+                                api.fetchApi("/ratio-crop/delete", {
+                                    method: "POST",
+                                    body: JSON.stringify({
+                                        filename: item.name,
+                                        subfolder: item.subfolder
+                                    })
+                                }).then(async (resp) => {
+                                    if (resp.status === 200) {
+                                        // Remove from array
+                                        this.uploadedImages.splice(rect.index, 1);
+                                        // Check if empty
+                                        if (this.uploadedImages.length === 0) {
+                                            if (this.w_dir) this.w_dir.value = "";
+                                        }
+                                        // Recompute
+                                        this.computeGrid();
+                                        app.graph.setDirtyCanvas(true, true);
+                                    } else {
+                                        alert("删除失败");
+                                    }
+                                });
+                            }
+                            return true; // Stop propagation
+                        }
+                    }
+                }
+            };
+
+            return r;
+        };
+    }
+});
