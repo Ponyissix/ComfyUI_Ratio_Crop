@@ -498,6 +498,28 @@ app.registerExtension({
             maskCanvas.height = img.height;
             const maskCtx = maskCanvas.getContext("2d");
             
+            // --- Restore Mask Logic ---
+            if (this.maskImg) {
+                // Scenario 1: In-memory cache exists (e.g. just edited)
+                maskCtx.drawImage(this.maskImg, 0, 0);
+            } else if (this.w_mask_path && this.w_mask_path.value) {
+                // Scenario 2: Page reload / Cold start, load from server
+                const maskFilename = this.w_mask_path.value;
+                const maskUrl = api.apiURL(`/view?filename=${encodeURIComponent(maskFilename)}&type=input`);
+                
+                const tempMask = new Image();
+                tempMask.crossOrigin = "Anonymous";
+                tempMask.onload = () => {
+                    // Draw loaded mask
+                    maskCtx.drawImage(tempMask, 0, 0, maskCanvas.width, maskCanvas.height);
+                    // Update cache
+                    this.maskImg = tempMask;
+                    // Trigger redraw
+                    draw();
+                };
+                tempMask.src = maskUrl;
+            }
+
             let isDrawing = false;
             let isMovingCrop = false;
             let startPos = { x: 0, y: 0 };
