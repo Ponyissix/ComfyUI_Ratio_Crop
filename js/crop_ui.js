@@ -322,6 +322,21 @@ app.registerExtension({
         };
         
         nodeType.prototype.onMouseDown = function(e, localPos, canvas) {
+            // 检查是否点击了 resize handle (右下角 或 左下角)
+            // 通常 resize 区域在右下角 15-20px 范围
+            const w = this.size[0];
+            const h = this.size[1];
+            const cornerSize = 30; // 稍微给大一点，避免误触
+
+            // 如果点击在右下角
+            if (localPos[0] > w - cornerSize && localPos[1] > h - cornerSize) {
+                return false; // 交给 ComfyUI 处理缩放
+            }
+            // 如果点击在左下角 (虽然标准只有右下角，但用户提到了左下角，可能也是习惯区域)
+            if (localPos[0] < cornerSize && localPos[1] > h - cornerSize) {
+                return false;
+            }
+
             if (localPos[1] > 200) {
                 if (this.img) {
                     this.showCropEditor();
